@@ -14,7 +14,9 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -26,10 +28,26 @@ class AlarmService : Service() {
     private var player: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private var savedVolume = -1
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** Μετά τα 2 λεπτά σιγής: ξαναχτυπάει. */
+    private val resume = Runnable {
+        silencedUntil = 0L
+        startSound()
+        startVibration()
+        try { startActivity(fullIntent(currentId)) } catch (_: Exception) { }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_SILENCE) {
+            stopSoundAndVibration()
+            handler.removeCallbacks(resume)
+            handler.postDelayed(resume, SOLVE_MS)
+            return START_STICKY
+        }
+
         val id = intent?.getIntExtra(EXTRA_ID, currentId) ?: currentId
         currentId = id
 
@@ -43,9 +61,7 @@ class AlarmService : Service() {
             nm.createNotificationChannel(ch)
         }
 
-        val full = Intent(this, AlarmActivity::class.java)
-            .putExtra(EXTRA_ID, id)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+        val full = fullIntent(id)
         val pi = PendingIntent.getActivity(
             this, 1, full, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -54,7 +70,7 @@ class AlarmService : Service() {
         val n = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_alarm)
             .setContentTitle(label)
-            .setContentText("Λύσε τις πράξεις για να το σβήσεις")
+            .setContentText("Λύσε τις πράξεις ή κάνε αναβολή")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -69,6 +85,8 @@ class AlarmService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0
         )
         isRinging = true
+        silencedUntil = 0L
+        handler.removeCallbacks(resume)
 
         if (player == null) startSound()
         if (vibrator == null) startVibration()
@@ -78,10 +96,15 @@ class AlarmService : Service() {
         return START_STICKY
     }
 
+    private fun fullIntent(id: Int) = Intent(this, AlarmActivity::class.java)
+        .putExtra(EXTRA_ID, id)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+
     private fun startSound() {
+        if (player != null) return
         val am = getSystemService(AudioManager::class.java)
         try {
-            savedVolume = am.getStreamVolume(AudioManager.STREAM_ALARM)
+            if (savedVolume < 0) savedVolume = am.getStreamVolume(AudioManager.STREAM_ALARM)
             am.setStreamVolume(AudioManager.STREAM_ALARM, am.getStreamMaxVolume(AudioManager.STREAM_ALARM), 0)
         } catch (_: Exception) { }
 
@@ -117,6 +140,7 @@ class AlarmService : Service() {
     }
 
     private fun startVibration() {
+        if (vibrator != null) return
         val v: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             getSystemService(VibratorManager::class.java)?.defaultVibrator
         } else {
@@ -132,12 +156,17 @@ class AlarmService : Service() {
         } catch (_: Exception) { }
     }
 
-    override fun onDestroy() {
+    private fun stopSoundAndVibration() {
         try { player?.stop() } catch (_: Exception) { }
         player?.release()
         player = null
         vibrator?.cancel()
         vibrator = null
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(resume)
+        stopSoundAndVibration()
         if (savedVolume >= 0) {
             try {
                 getSystemService(AudioManager::class.java)
@@ -145,15 +174,26 @@ class AlarmService : Service() {
             } catch (_: Exception) { }
         }
         isRinging = false
+        silencedUntil = 0L
         super.onDestroy()
     }
 
     companion object {
         const val CHANNEL = "alarm_ring"
         const val NOTIF_ID = 42
+        const val ACTION_SILENCE = "gr.misha.xypna.SILENCE"
+        const val SOLVE_MS = 2 * 60 * 1000L
 
         @Volatile var isRinging = false
         @Volatile var currentId = -1
+        /** Πότε τελειώνει η σιγή των 2 λεπτών (0 = χτυπάει τώρα). */
+        @Volatile var silencedUntil = 0L
+
+        /** «Λύση προβλήματος»: σιγή για 2 λεπτά, μετά ξαναχτυπάει. */
+        fun silence(ctx: Context) {
+            silencedUntil = System.currentTimeMillis() + SOLVE_MS
+            ctx.startService(Intent(ctx, AlarmService::class.java).setAction(ACTION_SILENCE))
+        }
 
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, AlarmService::class.java))

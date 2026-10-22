@@ -59,7 +59,49 @@ object AlarmScheduler {
     }
 
     fun cancel(ctx: Context, id: Int) {
-        ctx.getSystemService(AlarmManager::class.java).cancel(pending(ctx, id))
+        val am = ctx.getSystemService(AlarmManager::class.java)
+        am.cancel(pending(ctx, id))
+        am.cancel(snoozePending(ctx, id))
+    }
+
+    // ---------- Αναβολή ----------
+
+    const val SNOOZE_MINUTES = 5
+    const val MAX_SNOOZES = 3
+    private const val SNOOZE_REQUEST_BASE = 100_000
+    private const val SNOOZE_PREFS = "snooze"
+
+    private fun snoozePending(ctx: Context, id: Int): PendingIntent =
+        PendingIntent.getBroadcast(
+            ctx, SNOOZE_REQUEST_BASE + id,
+            Intent(ctx, AlarmReceiver::class.java)
+                .putExtra(EXTRA_ID, id)
+                .putExtra(EXTRA_SNOOZE, true),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+    /** Ξαναχτυπάει σε 5 λεπτά και μετράει μία αναβολή. */
+    fun snooze(ctx: Context, id: Int) {
+        val prefs = ctx.getSharedPreferences(SNOOZE_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putInt("count_$id", snoozesUsed(ctx, id) + 1).commit()
+
+        val at = System.currentTimeMillis() + SNOOZE_MINUTES * 60_000L
+        val am = ctx.getSystemService(AlarmManager::class.java)
+        val show = PendingIntent.getActivity(
+            ctx, 0, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        try {
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(at, show), snoozePending(ctx, id))
+        } catch (e: SecurityException) {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, snoozePending(ctx, id))
+        }
+    }
+
+    fun snoozesUsed(ctx: Context, id: Int): Int =
+        ctx.getSharedPreferences(SNOOZE_PREFS, Context.MODE_PRIVATE).getInt("count_$id", 0)
+
+    fun resetSnoozes(ctx: Context, id: Int) {
+        ctx.getSharedPreferences(SNOOZE_PREFS, Context.MODE_PRIVATE).edit().remove("count_$id").commit()
     }
 
     fun rescheduleAll(ctx: Context) {

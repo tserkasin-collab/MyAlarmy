@@ -5,6 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 const val EXTRA_ID = "alarm_id"
+const val EXTRA_SNOOZE = "is_snooze"
 
 /** days: bitmask, bit 0 = Δευτέρα ... bit 6 = Κυριακή. 0 = μία φορά. */
 data class Alarm(

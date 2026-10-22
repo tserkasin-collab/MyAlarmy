@@ -8,10 +8,14 @@ import androidx.core.content.ContextCompat
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val id = intent.getIntExtra(EXTRA_ID, -1)
+        val isSnooze = intent.getBooleanExtra(EXTRA_SNOOZE, false)
         val alarm = AlarmStore.get(context, id)
         if (alarm == null && id != AlarmScheduler.TEST_ID) return
 
-        if (alarm != null) {
+        // Νέο χτύπημα (όχι αναβολή) → μηδενίζουν οι αναβολές.
+        if (!isSnooze) AlarmScheduler.resetSnoozes(context, id)
+
+        if (alarm != null && !isSnooze) {
             if (!alarm.enabled) return
             if (alarm.days == 0) {
                 alarm.enabled = false            // μία φορά → κλείνει
